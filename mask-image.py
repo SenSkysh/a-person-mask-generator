@@ -1,5 +1,7 @@
+import argparse
 import os
 from functools import reduce
+import tempfile
 import wget
 import cv2
 import numpy as np
@@ -17,18 +19,36 @@ MASK_OPTION_2_BODY = 'body (skin)'
 MASK_OPTION_3_FACE = 'face (skin)'
 MASK_OPTION_4_CLOTHES = 'clothes'
 
-image_path = f'D:\\stable-diffusion\\Faces - IP Adaptor\\PXL_20230904_215912385.PORTRAIT.jpg'
-output_image_path = f'D:\\stable-diffusion\\Faces - IP Adaptor\\PXL_20230904_215912385.PORTRAIT-masked.jpg'
+TARGETS = [
+    MASK_OPTION_0_BACKGROUND,
+    MASK_OPTION_1_HAIR,
+    MASK_OPTION_2_BODY,
+    MASK_OPTION_3_FACE,
+    MASK_OPTION_4_CLOTHES
+]
+
+parser = argparse.ArgumentParser('Image masker')
+parser.add_argument("input", type=str)
+parser.add_argument("output", type=str)
+parser.add_argument("--dilation", type=int, default=5, help="mask dilation in pixels")
+parser.add_argument("--targets", type=str, nargs='*', default=[MASK_OPTION_4_CLOTHES], choices=TARGETS, help="mask targets")
+args = parser.parse_args()
+
+image_path = args.input
+output_image_path = args.output
+mask_targets = [MASK_OPTION_4_CLOTHES]
+mask_dilation = args.dilation
+
 
 if os.path.exists(output_image_path):
     os.remove(output_image_path)
 
 image = Image.open(f"{image_path}")
 
-mask_targets = [MASK_OPTION_0_BACKGROUND]
-mask_dilation = 0
 
-model_folder_path = 'mediapipe'
+
+model_folder_path = os.path.join(tempfile.gettempdir(), 'mask-image-mediapipe')
+print(model_folder_path)
 os.makedirs(model_folder_path, exist_ok=True)
 
 model_path = os.path.join(model_folder_path, 'selfie_multiclass_256x256.tflite')
@@ -86,26 +106,23 @@ with ImageSegmenter.create_from_options(options) as segmenter:
         masks.append(segmented_masks.confidence_masks[mask_index])
 
     image_data = media_pipe_image.numpy_view()
-
-    # convert the image shape from "rgb" to "rgba" aka add the alpha channel
-    if image_data.shape[-1] == 3:
-        image_shape = (image_data.shape[0], image_data.shape[1], 4)
-        alpha_channel = np.ones((image_shape[0], image_shape[1], 1), dtype=np.uint8) * 255
-        image_data = np.concatenate((image_data, alpha_channel), axis=2)
-
-
     image_shape = image_data.shape
 
-    mask_background_array = np.zeros(image_shape, dtype=np.uint8)
-    mask_background_array[:] = (255, 255, 255, 255)
+    # convert the image shape from "rgb" to "rgba" aka add the alpha channel
+    if image_shape[-1] == 3:
+        image_shape = (image_shape[0], image_shape[1], 4)
 
-    #mask_foreground_array = np.zeros(image_shape, dtype=np.uint8)
-    #mask_foreground_array[:] = (255, 255, 255, 255)
+
+    mask_background_array = np.zeros(image_shape, dtype=np.uint8)
+    mask_background_array[:] = (0, 0, 0, 255)
+
+    mask_foreground_array = np.zeros(image_shape, dtype=np.uint8)
+    mask_foreground_array[:] = (255, 255, 255, 255)
 
     mask_arrays = []
     for i, mask in enumerate(masks):
         condition = np.stack((mask.numpy_view(),) * image_shape[-1], axis=-1) > 0.25
-        mask_array = np.where(condition, mask_background_array, image_data)
+        mask_array = np.where(condition, mask_foreground_array, mask_background_array)
         mask_arrays.append(mask_array)
 
     # Merge our masks taking the maximum from each
